@@ -20,13 +20,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from scipy.stats import weibull_min
-import json
-
-# --- NEW IMPORTS for Weibull Plotting ---
-import matplotlib.pyplot as plt
-import statsmodels.api as sm
-from reliability.Fitters import Fit_Weibull_2P # Using reliability library for easier plotting
+from scipy.stats import weibull_min # <-- New import for Weibull analysis
+import json # <-- New import for pretty printing dicts
 
 # Load .env for OpenAI key
 load_dotenv()
@@ -51,74 +46,65 @@ except Exception as e:
     llm = None
     openai_client = None
 
-# --- UPDATED: Weibull Reliability Agent ---
+# --- NEW: Weibull Reliability Agent ---
 def run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, machine_id):
     """
-    Agent 4: Performs Weibull analysis and generates a probability plot.
+    Agent 4: Performs Weibull analysis on equipment failure data.
+    This agent is a programmatic agent using scipy, not an LLM.
     """
     try:
-        # Ensure data is numpy array of floats
-        failure_times = np.asarray(failure_times, dtype=float)
-        censored_times = np.asarray(censored_times, dtype=float)
-
-        if len(failure_times) < 2:
-             return {
-                "analysis_success": False,
-                "error_message": "Weibull analysis requires at least 2 failure data points."
-            }
-
-
-        # Fit the Weibull distribution using the reliability library
-        fitter = Fit_Weibull_2P(failures=failure_times, right_censored=censored_times)
+        # Combine failure and censored data for fitting
+        all_data = np.concatenate([failure_times, censored_times])
         
-        beta_shape = fitter.beta
-        eta_scale = fitter.alpha
+        # Create a boolean array indicating uncensored (failures) and censored data
+        # True for a failure, False for censored data
+        is_uncensored = np.concatenate([
+            np.ones_like(failure_times, dtype=bool),
+            np.zeros_like(censored_times, dtype=bool)
+        ])
 
-        # --- Generate Weibull Probability Plot ---
-        fig, ax = plt.subplots(figsize=(8, 6))
-        fitter.probability_plot(ax=ax)
-        ax.set_title(f'Weibull Probability Plot for {machine_id}')
-        ax.grid(True)
+        # Fit the Weibull distribution using right-censored data
+        # floc=0 fixes the location parameter at 0, which is standard for lifetime analysis
+        shape, loc, scale = weibull_min.fit(all_data, is_uncensored, floc=0)
+        
+        beta_shape = shape
+        eta_scale = scale
 
-        # Save plot to an in-memory buffer
-        buf = BytesIO()
-        plt.savefig(buf, format="png", bbox_inches='tight')
-        buf.seek(0)
-        plot_image = buf.getvalue()
-        plt.close(fig) # Close the figure to free memory
-
-        # --- Interpretation of the failure mode based on beta ---
+        # Step 2: Interpretation of the failure mode based on beta
         if beta_shape < 1.0:
             failure_mode = 'infant_mortality'
             interpretation_text = f"Infant Mortality (β = {beta_shape:.2f} < 1): The component is failing early, suggesting issues with manufacturing, installation, or burn-in."
-        elif np.isclose(beta_shape, 1.0, atol=0.15):
+        elif np.isclose(beta_shape, 1.0, atol=0.1):
             failure_mode = 'useful_life'
             interpretation_text = f"Useful Life (β = {beta_shape:.2f} ≈ 1): Failures are random and constant, as expected during the component's normal operating life."
         else: # beta_shape > 1.0
             failure_mode = 'wear_out'
             interpretation_text = f"Wear-Out (β = {beta_shape:.2f} > 1): The failure rate is increasing, indicating the component is aging and nearing the end of its life."
 
-        # --- Prediction of failure probability in the next 30 days (720 hours) ---
+        # Step 3: Prediction of failure probability in the next 30 days (720 hours)
         t = current_op_hours
         delta_t = 30 * 24 # 30 days in hours
         
+        # Weibull CDF: F(t) = 1 - exp(-(t/η)^β)
         # We calculate the conditional probability: P(T < t+Δt | T > t) = (F(t+Δt) - F(t)) / (1 - F(t))
-        cdf_t = fitter.CDF(t)
-        cdf_t_plus_delta = fitter.CDF(t + delta_t)
+        cdf_t = weibull_min.cdf(t, c=beta_shape, scale=eta_scale)
+        cdf_t_plus_delta = weibull_min.cdf(t + delta_t, c=beta_shape, scale=eta_scale)
+        
+        # The survival function S(t) is 1 - F(t)
         survival_t = 1 - cdf_t
         
-        if survival_t > 1e-9: # Avoid division by zero
+        if survival_t > 0:
             prob_failure_next_30_days = (cdf_t_plus_delta - cdf_t) / survival_t
         else:
             prob_failure_next_30_days = 1.0 # If survival probability is zero, failure is certain
 
-        # --- Recommendation ---
+        # Recommendation based on a 5% threshold
         if prob_failure_next_30_days > 0.05:
             recommended_action = "Generate maintenance alert for component replacement. The predicted failure probability exceeds the 5% threshold."
         else:
             recommended_action = "No immediate action required. Continue monitoring the component."
 
-        # --- Construct the final output ---
+        # Construct the final output
         output = {
             "analysis_success": True,
             "machine_id": machine_id,
@@ -129,8 +115,7 @@ def run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, 
             "failure_mode": failure_mode,
             "interpretation": interpretation_text,
             "predicted_30_day_failure_probability": prob_failure_next_30_days,
-            "recommended_action": recommended_action,
-            "weibull_plot": plot_image # <-- ADDED THE PLOT IMAGE
+            "recommended_action": recommended_action
         }
 
     except Exception as e:
@@ -140,81 +125,6 @@ def run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, 
         }
     
     return output
-
-# --- NEW: UI Function for Weibull Analysis ---
-def run_weibull_agent_ui():
-    st.header("⚙️ Weibull Reliability Agent")
-    st.info("Upload your equipment failure data to perform a Weibull analysis and predict future reliability.")
-
-    if "weibull_analysis_results" not in st.session_state:
-        st.session_state.weibull_analysis_results = None
-
-    uploaded_file = st.file_uploader(
-        "Upload Excel or CSV file with failure/censored times", type=["xlsx", "xls", "csv"], key="weibull_uploader"
-    )
-
-    if uploaded_file:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-            
-            st.dataframe(df.head())
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                failure_cols = st.multiselect("Select column(s) with **Failure Times** (hours to failure)", options=df.columns)
-            with col2:
-                censored_cols = st.multiselect("Select column(s) with **Censored Times** (hours run without failure)", options=df.columns)
-
-            st.markdown("---")
-            col3, col4 = st.columns(2)
-            with col3:
-                 machine_id = st.text_input("Enter Machine/Component ID", "Pump-12A")
-            with col4:
-                 current_op_hours = st.number_input("Enter Current Operating Hours", min_value=0, value=5000)
-
-            if st.button("🔬 Run Weibull Analysis"):
-                failure_times = pd.concat([df[col] for col in failure_cols], ignore_index=True).dropna().tolist()
-                censored_times = pd.concat([df[col] for col in censored_cols], ignore_index=True).dropna().tolist()
-                
-                if not failure_times:
-                    st.error("Please select at least one failure time column with data.")
-                else:
-                    with st.spinner("Performing Weibull analysis and generating plot..."):
-                        results = run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, machine_id)
-                        st.session_state.weibull_analysis_results = results
-        
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-
-    if st.session_state.weibull_analysis_results:
-        results = st.session_state.weibull_analysis_results
-        st.markdown("---")
-        st.subheader("📊 Weibull Analysis Results")
-        
-        if results["analysis_success"]:
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                st.image(results['weibull_plot'], caption=f"Weibull Plot for {results['machine_id']}")
-            
-            with col2:
-                # Display key metrics
-                st.metric(
-                    label="Failure Probability (Next 30 Days)",
-                    value=f"{results['predicted_30_day_failure_probability']:.2%}"
-                )
-                st.metric(label="β (Shape Parameter)", value=f"{results['weibull_parameters']['beta_shape_parameter']:.2f}")
-                st.metric(label="η (Scale Parameter / Characteristic Life)", value=f"{results['weibull_parameters']['eta_scale_parameter']:.0f} hours")
-                
-                # Display interpretation and recommendation
-                st.write(f"**Failure Mode:** {results['failure_mode'].replace('_', ' ').title()}")
-                st.info(f"**Interpretation:** {results['interpretation']}")
-                st.warning(f"**Recommendation:** {results['recommended_action']}")
-            
-        else:
-            st.error(f"Analysis Failed: {results['error_message']}")
 
 # --- CNC AI Agent Functions ---
 def run_cnc_expert_agent(llm, cnc_data_string):
@@ -232,4 +142,162 @@ Your analysis must be thorough and actionable for a shop floor manager to preven
 
 **Instructions:**
 1.  **Identify Anomalies:** Carefully examine the data for any unusual patterns, spikes, drops, or correlations between different metrics (e.g., temperature vs. vibration, spindle speed vs. tool wear). List each anomaly you find.
-2.  **Determine Root Cause:** For each anomaly, provide a detailed explanation of the most likely root cause. Be
+2.  **Determine Root Cause:** For each anomaly, provide a detailed explanation of the most likely root cause. Be specific. For example, instead of "machine is vibrating," say "A sudden spike in Y-axis vibration concurrent with a rise in spindle temperature suggests a worn spindle bearing or an unbalanced tool."
+3.  **Provide Detailed Fixes:** For each identified issue, provide a clear, step-by-step Standard Operating Procedure (SOP) that a maintenance technician can follow to fix the problem. Include required tools and estimated time for the fix.
+4.  **Perform Failure Prediction (Weibull Analysis):** Based on the pattern of anomalies you identified (which can be treated as potential failure events), perform a conceptual Weibull analysis to predict future failures.
+    * **Estimate Weibull Parameters:** Based on whether the anomalies are occurring more frequently over time, randomly, or less frequently, provide a hypothesized shape parameter (β) and an estimated scale parameter (η, characteristic life in hours).
+    * **Interpret Failure Mode:** State whether the machine is likely in **infant mortality (β < 1)**, **useful life (β ≈ 1)**, or **wear-out (β > 1)**, and justify your choice based on the data.
+    * **Predict 30-Day Failure Probability:** Estimate the probability of a critical failure within the next 30 days of operation.
+    * **Recommend Predictive Action:** Based on the predicted probability, give a clear recommendation (e.g., 'Generate maintenance alert' or 'No immediate action required').
+
+**Structure Your Report:**
+Format your response using markdown with the following sections:
+    - **Overall Machine Health Summary**
+    - **Anomaly 1: [Name of Anomaly]**
+        - **Description:**
+        - **Potential Root Cause:**
+        - **Recommended Action Plan (SOP):**
+    - **Anomaly 2: [Name of Anomaly]** (If applicable)
+        - ... and so on.
+    - **Failure Prediction Analysis**
+        - **Weibull Parameter Estimates:** (Your estimated β and η)
+        - **Failure Mode Interpretation:** (Your analysis of the failure mode)
+        - **30-Day Failure Probability:** (Your calculated probability)
+        - **Recommendation:** (Your final predictive action)
+"""
+    )
+    chain = LLMChain(llm=llm, prompt=prompt)
+    return chain.run(cnc_data=cnc_data_string)
+
+def run_business_impact_agent(llm, analysis_report):
+    """Agent 3: Calculates the business benefits of the proactive fix."""
+    prompt = PromptTemplate.from_template(
+        """
+You are a business operations analyst for a major automotive plant.
+Your plant's productivity is **40 cars per hour**. The average hourly labor cost for a reactive maintenance team (2 people) is **£100 per hour**.
+
+You have been given a proactive maintenance report from a CNC expert AI. Your task is to quantify the business benefits of implementing the recommended fixes *before* a machine failure occurs.
+
+**CNC Expert's Analysis Report:**
+---
+{analysis_report}
+---
+
+**Instructions:**
+Based on the severity and nature of the issues described in the report, calculate the following:
+
+1.  **Downtime Avoidance (in hours):** Estimate the total potential plant floor downtime (in hours) that would have occurred if these issues led to a full machine breakdown. Justify your estimation based on the report.
+2.  **Productivity Savings:** Calculate the number of cars that will not be lost due to this avoided downtime. Use the formula: `Avoided Downtime Hours * 40 Cars/Hour`.
+3.  **Labor Cost Savings:** Estimate the reactive labor hours that would have been needed to diagnose and fix a a full breakdown (this is typically much higher than proactive maintenance). Calculate the cost savings using the formula: `(Reactive Repair Hours - Proactive Repair Hours from report) * £100/Hour`. Be realistic in your estimation of reactive hours.
+4.  **Weibull Failure Prediction** Perform Weibull analysis on equipment failure data on uploaded data
+
+**Output Format:**
+Provide a concise summary using markdown.
+
+### Proactive Maintenance - Business Value Report
+
+- **Estimated Downtime Avoided:**
+- **Productivity Impact:**
+- **Labor Cost Savings:**
+- **Overall Summary:** (A brief concluding sentence on the value of this proactive analysis).
+- **% of accuracy of the findings**
+"""
+    )
+    chain = LLMChain(llm=llm, prompt=prompt)
+    return chain.run(analysis_report=analysis_report)
+
+
+def run_cnc_ai_agent(llm):
+    """Main orchestrator for the CNC AI Agent workflow."""
+    st.header("⚙️ CNC AI Agent")
+
+    # Agent 1: File Upload and Display
+    st.markdown("### Agent 1: Data Ingestion")
+    st.info("Please upload the CNC machine data as an Excel file.")
+
+    uploaded_file = st.file_uploader(
+        "Upload Excel file", type=["xlsx", "xls"], key="cnc_uploader"
+    )
+
+    # Initialize session state
+    if "cnc_df" not in st.session_state:
+        st.session_state.cnc_df = None
+    if "cnc_analysis" not in st.session_state:
+        st.session_state.cnc_analysis = None
+    if "cnc_benefits" not in st.session_state:
+        st.session_state.cnc_benefits = None
+    if "last_file_name" not in st.session_state:
+        st.session_state.last_file_name = ""
+
+    if uploaded_file:
+        # If a new file is uploaded, reset the analysis
+        if uploaded_file.name != st.session_state.last_file_name:
+            st.session_state.cnc_df = None
+            st.session_state.cnc_analysis = None
+            st.session_state.cnc_benefits = None
+            st.session_state.last_file_name = uploaded_file.name
+
+        try:
+            df = pd.read_excel(uploaded_file)
+            st.session_state.cnc_df = df
+            st.dataframe(df)
+        except Exception as e:
+            st.error(f"Error reading the Excel file: {e}")
+            st.session_state.cnc_df = None
+
+    if st.session_state.cnc_df is not None:
+        if st.button("🔍 Analyze CNC Data"):
+            # Agent 2: Expert Analysis
+            with st.spinner("Agent 2 (CNC Expert) is analyzing the data..."):
+
+                # data_string = st.session_state.cnc_df.to_string() # Old line
+                # New line - sends a statistical summary
+                # data_string = st.session_state.cnc_df.describe().to_string()
+                data_string = st.session_state.cnc_df.sample(
+                    n=500, random_state=1
+                ).to_string()
+                analysis = run_cnc_expert_agent(llm, data_string)
+                st.session_state.cnc_analysis = analysis
+
+            # Agent 3: Business Impact
+            with st.spinner("Agent 3 (Business Impact) is calculating the benefits..."):
+                benefits = run_business_impact_agent(llm, st.session_state.cnc_analysis)
+                st.session_state.cnc_benefits = benefits
+
+    if st.session_state.cnc_analysis:
+        st.markdown("---")
+        st.markdown("### Agent 2: CNC Expert Analysis")
+        st.markdown(st.session_state.cnc_analysis)
+
+    if st.session_state.cnc_benefits:
+        st.markdown("---")
+        st.markdown("### Agent 3: Business Impact Report")
+        st.markdown(st.session_state.cnc_benefits)
+        st.success("✅ CNC Analysis Workflow Complete.")
+
+# ===============================================================================
+
+# --- Streamlit UI and Logic ---
+step = st.sidebar.radio(
+    "**Available Agents:**",
+    ["1. CNC AI Agent"])
+
+# Initialize session state variables
+if "vectordb" not in st.session_state:
+    st.session_state.vectordb = None
+if "few_shot" not in st.session_state:
+    st.session_state.few_shot = ""
+if "ticket" not in st.session_state:
+    st.session_state.ticket = ""
+if "generated_code" not in st.session_state:
+    st.session_state.generated_code = ""
+
+if not openai_initialized:
+    st.error("❌ OpenAI is not initialized. Please check your API key and refresh the page.")
+else:
+    if step == "1. CNC AI Agent":
+        st.subheader("🛠️ Litmus EDGE Agent: CNC Machine Diagnostics")
+        st.markdown(
+            "This agent looks at your CNC Machine data captured from Litmus EDGE and predicts failure."
+        )
+        run_cnc_ai_agent(llm)
