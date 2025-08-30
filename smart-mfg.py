@@ -350,9 +350,7 @@ def run_cnc_ai_agent(llm):
 # --- Streamlit UI and Logic ---
 step = st.sidebar.radio(
     "**Available Agents:**",
-    ["1. CNC AI Agent", 
-     #"2. Weibull Failure Prediction Agent"], # <-- Added new agent here
-)
+    ["1. CNC AI Agent")
 
 # Initialize session state variables
 if "vectordb" not in st.session_state:
