@@ -126,76 +126,6 @@ def run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, 
     
     return output
 
-def run_weibull_ui():
-    """UI for the Weibull Failure Prediction Agent."""
-    st.header("⚙️ Weibull Failure Prediction Agent")
-    st.info("This agent analyzes historical data to predict equipment failures using the Weibull distribution.")
-
-    with st.expander("ℹ️ How to use this agent", expanded=False):
-        st.markdown("""
-        1.  **Machine ID**: Enter a unique identifier for the machine you are analyzing.
-        2.  **Failure Data**: Provide a comma-separated list of the operating hours at which the component failed (e.g., `1200, 1550, 2100`). These are **uncensored** data points.
-        3.  **Censored Data**: Provide a comma-separated list of operating hours for components that are *still in service* and have not yet failed (e.g., `1800, 2500`). These are **right-censored** data points.
-        4.  **Current Operating Hours**: Enter the total hours the machine has been running to calculate the future failure probability from this point.
-        5.  Click **Analyze Failure Data** to run the analysis.
-        """)
-
-    machine_id = st.text_input("Enter Machine ID", "CNC-001")
-    failure_data_str = st.text_area("Failure Data (Operating Hours, comma-separated)", "850, 1020, 1400, 1850, 2200, 3000")
-    censored_data_str = st.text_area("Censored Data (Operating Hours of units still running, comma-separated)", "2500, 2800")
-    current_hours = st.number_input("Current Operating Hours for Prediction", min_value=0, value=3000)
-
-    if st.button("📈 Analyze Failure Data"):
-        try:
-            # Parse input strings into lists of floats
-            failure_times = [float(x.strip()) for x in failure_data_str.split(',') if x.strip()]
-            censored_times = [float(x.strip()) for x in censored_data_str.split(',') if x.strip()]
-
-            if not failure_times:
-                st.error("❌ Failure Data cannot be empty.")
-            else:
-                with st.spinner("Reliability Engineer Agent is performing Weibull analysis..."):
-                    result = run_weibull_analysis_agent(failure_times, censored_times, current_hours, machine_id)
-
-                    if result["analysis_success"]:
-                        st.success("✅ Weibull Analysis Complete!")
-                        
-                        st.subheader("Results")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric(
-                                label="β (Shape Parameter)", 
-                                value=f"{result['weibull_parameters']['beta_shape_parameter']:.2f}"
-                            )
-                        with col2:
-                            st.metric(
-                                label="η (Scale Parameter / Characteristic Life)", 
-                                value=f"{result['weibull_parameters']['eta_scale_parameter']:.0f} hours"
-                            )
-                        
-                        st.subheader("Interpretation")
-                        st.markdown(f"**Failure Mode:** `{result['failure_mode']}`")
-                        st.write(result['interpretation'])
-
-                        st.subheader("Prediction & Recommendation")
-                        prob = result['predicted_30_day_failure_probability']
-                        st.metric(
-                            label="Predicted Failure Probability (Next 30 Days)",
-                            value=f"{prob:.2%}"
-                        )
-                        st.warning(f"**Recommended Action:** {result['recommended_action']}")
-
-                        st.subheader("Full Analysis Output")
-                        st.json(result)
-
-                    else:
-                        st.error(f"Analysis Failed: {result['error_message']}")
-
-        except ValueError:
-            st.error("❌ Invalid input. Please ensure all data points are numbers separated by commas.")
-        except Exception as e:
-            st.error(f"An unexpected error occurred: {e}")
-
 # --- CNC AI Agent Functions ---
 def run_cnc_expert_agent(llm, cnc_data_string):
     """Agent 2: Analyzes CNC data for anomalies, provides solutions, and predicts failures."""
@@ -350,7 +280,7 @@ def run_cnc_ai_agent(llm):
 # --- Streamlit UI and Logic ---
 step = st.sidebar.radio(
     "**Available Agents:**",
-    ["1. CNC AI Agent")]
+    ["1. CNC AI Agent"])
 
 # Initialize session state variables
 if "vectordb" not in st.session_state:
@@ -371,11 +301,3 @@ else:
             "This agent looks at your CNC Machine data captured from Litmus EDGE and predicts failure."
         )
         run_cnc_ai_agent(llm)
-    
-    # --- NEW: Logic to run the Weibull agent UI ---
-    elif step == "2. Weibull Failure Prediction Agent":
-        st.subheader("🔧 Reliability Engineer Agent: Failure Prediction")
-        st.markdown(
-            "This agent uses Weibull analysis to determine failure modes and predict future failures."
-        )
-        run_weibull_ui()
