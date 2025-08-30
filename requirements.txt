@@ -27,3 +27,4 @@ reportlab
 scipy 
 matplotlib
 statsmodels
+plotly
