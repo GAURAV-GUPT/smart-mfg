@@ -266,15 +266,6 @@ def run_cnc_ai_agent(llm):
         "Upload Excel file", type=["xlsx", "xls"], key="cnc_uploader"
     )
     
-    # Weibull analysis inputs
-    st.markdown("---")
-    st.markdown("### Agent 4: Weibull Analysis Inputs")
-    st.markdown("Provide equipment failure data for Weibull analysis.")
-    failure_times_input = st.text_area("Failure Times (comma-separated, e.g., 1000, 2500, 4000)")
-    censored_times_input = st.text_area("Censored Times (comma-separated, e.g., 1500, 3000)")
-    current_op_hours = st.number_input("Current Operating Hours for a component to be analyzed", min_value=0, value=5000)
-    machine_id_input = st.text_input("Machine/Component ID", "CNC-001")
-    
     # Initialize session state
     if "cnc_df" not in st.session_state:
         st.session_state.cnc_df = None
@@ -303,56 +294,46 @@ def run_cnc_ai_agent(llm):
             st.error(f"Error reading the Excel file: {e}")
             st.session_state.cnc_df = None
 
+    # Weibull analysis inputs
+    st.markdown("---")
+    st.markdown("### Agent 4: Weibull Analysis Inputs")
+    st.markdown("Provide equipment failure data for Weibull analysis.")
+    
+    # NEW: Dropdown menus to select columns from the uploaded data
     if st.session_state.cnc_df is not None:
-        if st.button("🔍 Analyze CNC Data"):
-            # Agent 2: Expert Analysis
-            with st.spinner("Agent 2 (CNC Expert) is analyzing the data..."):
-
-                # data_string = st.session_state.cnc_df.to_string() # Old line
-                # New line - sends a statistical summary
-                # data_string = st.session_state.cnc_df.describe().to_string()
-                data_string = st.session_state.cnc_df.sample(
-                    n=500, random_state=1
-                ).to_string()
-                analysis = run_cnc_expert_agent(llm, data_string)
-                st.session_state.cnc_analysis = analysis
-
-            # Agent 3: Business Impact
-            with st.spinner("Agent 3 (Business Impact) is calculating the benefits..."):
-                benefits = run_business_impact_agent(llm, st.session_state.cnc_analysis)
-                st.session_state.cnc_benefits = benefits
-
-    if st.button("📈 Run Weibull Analysis"):
-        if failure_times_input:
-            try:
-                failure_times = np.array([float(x.strip()) for x in failure_times_input.split(',')])
-                censored_times = np.array([float(x.strip()) for x in censored_times_input.split(',')]) if censored_times_input else np.array([])
-                
-                with st.spinner("Agent 4 is performing Weibull reliability analysis..."):
-                    weibull_results = run_weibull_analysis_agent(
-                        failure_times=failure_times,
-                        censored_times=censored_times,
-                        current_op_hours=current_op_hours,
-                        machine_id=machine_id_input
-                    )
-                    st.session_state.weibull_results = weibull_results
-            except ValueError:
-                st.error("Invalid input for failure or censored times. Please enter comma-separated numbers.")
-        else:
-            st.error("Please provide at least some failure times to run the Weibull analysis.")
+        columns = st.session_state.cnc_df.columns.tolist()
+        failure_col = st.selectbox("Select Failure Times Column", columns)
+        censored_col = st.selectbox("Select Censored Times Column", ['None'] + columns)
+        current_op_hours = st.number_input("Current Operating Hours for a component to be analyzed", min_value=0, value=5000)
+        machine_id_input = st.text_input("Machine/Component ID", "CNC-001")
+        
+        if st.button("📈 Run Weibull Analysis"):
+            if failure_col:
+                try:
+                    failure_times = st.session_state.cnc_df[failure_col].dropna().values.astype(float)
+                    censored_times = np.array([])
+                    if censored_col and censored_col != 'None':
+                        censored_times = st.session_state.cnc_df[censored_col].dropna().values.astype(float)
+                    
+                    if failure_times.size == 0:
+                        st.error("The selected failure times column is empty. Please select a valid column.")
+                    else:
+                        with st.spinner("Agent 4 is performing Weibull reliability analysis..."):
+                            weibull_results = run_weibull_analysis_agent(
+                                failure_times=failure_times,
+                                censored_times=censored_times,
+                                current_op_hours=current_op_hours,
+                                machine_id=machine_id_input
+                            )
+                            st.session_state.weibull_results = weibull_results
+                except ValueError:
+                    st.error("Invalid data in selected columns. Please ensure they contain numerical data.")
+            else:
+                st.error("Please select a failure times column to run the Weibull analysis.")
+    else:
+        st.info("Please upload an Excel file first to select data columns for Weibull analysis.")
 
     # Display results
-    if st.session_state.cnc_analysis:
-        st.markdown("---")
-        st.markdown("### Agent 2: CNC Expert Analysis")
-        st.markdown(st.session_state.cnc_analysis)
-
-    if st.session_state.cnc_benefits:
-        st.markdown("---")
-        st.markdown("### Agent 3: Business Impact Report")
-        st.markdown(st.session_state.cnc_benefits)
-        st.success("✅ CNC Analysis Workflow Complete.")
-
     if st.session_state.weibull_results:
         st.markdown("---")
         st.markdown("### Agent 4: Weibull Reliability Analysis")
@@ -369,6 +350,33 @@ def run_cnc_ai_agent(llm):
             st.components.v1.html(results["weibull_plot_html"], height=550)
         else:
             st.error(f"Weibull analysis failed: {st.session_state.weibull_results['error_message']}")
+
+    if st.session_state.cnc_df is not None:
+        if st.button("🔍 Run ALL Analysis"):
+            # Agent 2: Expert Analysis
+            with st.spinner("Agent 2 (CNC Expert) is analyzing the data..."):
+                data_string = st.session_state.cnc_df.sample(
+                    n=500, random_state=1
+                ).to_string()
+                analysis = run_cnc_expert_agent(llm, data_string)
+                st.session_state.cnc_analysis = analysis
+
+            # Agent 3: Business Impact
+            with st.spinner("Agent 3 (Business Impact) is calculating the benefits..."):
+                benefits = run_business_impact_agent(llm, st.session_state.cnc_analysis)
+                st.session_state.cnc_benefits = benefits
+
+    if st.session_state.cnc_analysis:
+        st.markdown("---")
+        st.markdown("### Agent 2: CNC Expert Analysis")
+        st.markdown(st.session_state.cnc_analysis)
+
+    if st.session_state.cnc_benefits:
+        st.markdown("---")
+        st.markdown("### Agent 3: Business Impact Report")
+        st.markdown(st.session_state.cnc_benefits)
+        st.success("✅ CNC Analysis Workflow Complete.")
+
 
 # ===============================================================================
 
