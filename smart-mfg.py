@@ -254,7 +254,7 @@ def run_cnc_ai_agent(llm):
                 # New line - sends a statistical summary
                 # data_string = st.session_state.cnc_df.describe().to_string()
                 data_string = st.session_state.cnc_df.sample(
-                    n=100, random_state=1
+                    n=500, random_state=1
                 ).to_string()
                 analysis = run_cnc_expert_agent(llm, data_string)
                 st.session_state.cnc_analysis = analysis
