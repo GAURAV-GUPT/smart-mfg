@@ -24,3 +24,4 @@ pandas
 langchain_community
 openpyxl
 reportlab
+scipy 
