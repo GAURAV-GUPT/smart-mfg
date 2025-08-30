@@ -1,3 +1,4 @@
+# Full GenAI Developer Assistant (Steps 1 to 16 Integrated)
 import os
 import streamlit as st
 import pandas as pd
@@ -19,11 +20,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from scipy.stats import weibull_min
-import json
-import matplotlib.pyplot as plt
-import plotly.express as px
-import plotly.graph_objects as go
+from scipy.stats import weibull_min # <-- New import for Weibull analysis
+import json # <-- New import for pretty printing dicts
 
 # Load .env for OpenAI key
 load_dotenv()
@@ -51,8 +49,8 @@ except Exception as e:
 # --- NEW: Weibull Reliability Agent ---
 def run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, machine_id):
     """
-    Agent 4: Performs Weibull analysis on equipment failure data and generates a probability plot.
-    This agent is a programmatic agent using scipy and plotly, not an LLM.
+    Agent 4: Performs Weibull analysis on equipment failure data.
+    This agent is a programmatic agent using scipy, not an LLM.
     """
     try:
         # Combine failure and censored data for fitting
@@ -106,50 +104,6 @@ def run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, 
         else:
             recommended_action = "No immediate action required. Continue monitoring the component."
 
-        # --- NEW: Generate Weibull probability distribution plot ---
-        time_points = np.linspace(0, all_data.max() * 1.2, 500)
-        weibull_pdf = weibull_min.pdf(time_points, c=beta_shape, scale=eta_scale)
-        weibull_cdf = weibull_min.cdf(time_points, c=beta_shape, scale=eta_scale)
-
-        # Plotly figure
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=time_points, y=weibull_pdf, mode='lines', name='PDF',
-                                 line=dict(color='RoyalBlue', width=2)))
-        fig.add_trace(go.Scatter(x=time_points, y=weibull_cdf, mode='lines', name='CDF',
-                                 line=dict(color='DarkOrange', width=2, dash='dash')))
-
-        fig.update_layout(
-            title=f'Weibull Probability Distribution for Machine {machine_id}',
-            xaxis_title='Operating Hours (t)',
-            yaxis_title='Probability',
-            legend_title='Distribution Type',
-            hovermode="x unified",
-            template="plotly_white",
-            height=500
-        )
-        # Add a vertical line for the current operating hours
-        fig.add_vline(x=current_op_hours, line_width=2, line_dash="dash", line_color="green", name='Current Hours',
-                      annotation_text=f"Current Hours: {current_op_hours}", annotation_position="bottom right")
-
-        # Add a point for the current failure probability
-        current_failure_prob = weibull_min.cdf(current_op_hours, c=beta_shape, scale=eta_scale)
-        fig.add_trace(go.Scatter(x=[current_op_hours], y=[current_failure_prob],
-                                 mode='markers', marker=dict(color='Red', size=10),
-                                 name=f'P(Failure < {current_op_hours}h)'))
-        # Add a text box with the current failure probability
-        fig.add_annotation(
-            x=current_op_hours,
-            y=current_failure_prob,
-            text=f"Cumulative Failure Probability:<br>{current_failure_prob:.2%}",
-            showarrow=True,
-            arrowhead=2,
-            ax=20,
-            ay=-40
-        )
-        
-        plot_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
-
-
         # Construct the final output
         output = {
             "analysis_success": True,
@@ -161,8 +115,7 @@ def run_weibull_analysis_agent(failure_times, censored_times, current_op_hours, 
             "failure_mode": failure_mode,
             "interpretation": interpretation_text,
             "predicted_30_day_failure_probability": prob_failure_next_30_days,
-            "recommended_action": recommended_action,
-            "weibull_plot_html": plot_html # Add the plot HTML to the output
+            "recommended_action": recommended_action
         }
 
     except Exception as e:
@@ -265,7 +218,7 @@ def run_cnc_ai_agent(llm):
     uploaded_file = st.file_uploader(
         "Upload Excel file", type=["xlsx", "xls"], key="cnc_uploader"
     )
-    
+
     # Initialize session state
     if "cnc_df" not in st.session_state:
         st.session_state.cnc_df = None
@@ -273,8 +226,6 @@ def run_cnc_ai_agent(llm):
         st.session_state.cnc_analysis = None
     if "cnc_benefits" not in st.session_state:
         st.session_state.cnc_benefits = None
-    if "weibull_results" not in st.session_state:
-        st.session_state.weibull_results = None
     if "last_file_name" not in st.session_state:
         st.session_state.last_file_name = ""
 
@@ -294,67 +245,14 @@ def run_cnc_ai_agent(llm):
             st.error(f"Error reading the Excel file: {e}")
             st.session_state.cnc_df = None
 
-    # Weibull analysis inputs
-    st.markdown("---")
-    st.markdown("### Agent 4: Weibull Analysis Inputs")
-    st.markdown("Provide equipment failure data for Weibull analysis.")
-    
-    # NEW: Dropdown menus to select columns from the uploaded data
     if st.session_state.cnc_df is not None:
-        columns = st.session_state.cnc_df.columns.tolist()
-        failure_col = st.selectbox("Select Failure Times Column", columns)
-        censored_col = st.selectbox("Select Censored Times Column", ['None'] + columns)
-        current_op_hours = st.number_input("Current Operating Hours for a component to be analyzed", min_value=0, value=5000)
-        machine_id_input = st.text_input("Machine/Component ID", "CNC-001")
-        
-        if st.button("📈 Run Weibull Analysis"):
-            if failure_col:
-                try:
-                    failure_times = st.session_state.cnc_df[failure_col].dropna().values.astype(float)
-                    censored_times = np.array([])
-                    if censored_col and censored_col != 'None':
-                        censored_times = st.session_state.cnc_df[censored_col].dropna().values.astype(float)
-                    
-                    if failure_times.size == 0:
-                        st.error("The selected failure times column is empty. Please select a valid column.")
-                    else:
-                        with st.spinner("Agent 4 is performing Weibull reliability analysis..."):
-                            weibull_results = run_weibull_analysis_agent(
-                                failure_times=failure_times,
-                                censored_times=censored_times,
-                                current_op_hours=current_op_hours,
-                                machine_id=machine_id_input
-                            )
-                            st.session_state.weibull_results = weibull_results
-                except ValueError:
-                    st.error("Invalid data in selected columns. Please ensure they contain numerical data.")
-            else:
-                st.error("Please select a failure times column to run the Weibull analysis.")
-    else:
-        st.info("Please upload an Excel file first to select data columns for Weibull analysis.")
-
-    # Display results
-    if st.session_state.weibull_results:
-        st.markdown("---")
-        st.markdown("### Agent 4: Weibull Reliability Analysis")
-        if st.session_state.weibull_results["analysis_success"]:
-            results = st.session_state.weibull_results
-            st.json(results, expanded=False)
-            st.markdown(f"**Weibull Shape Parameter (β):** {results['weibull_parameters']['beta_shape_parameter']:.2f}")
-            st.markdown(f"**Weibull Scale Parameter (η):** {results['weibull_parameters']['eta_scale_parameter']:.2f} hours")
-            st.markdown(f"**Failure Mode:** {results['interpretation']}")
-            st.markdown(f"**Predicted 30-Day Failure Probability:** {results['predicted_30_day_failure_probability']:.2%}")
-            st.markdown(f"**Recommendation:** {results['recommended_action']}")
-            st.markdown("---")
-            st.markdown("#### Weibull Probability Distribution Plot")
-            st.components.v1.html(results["weibull_plot_html"], height=550)
-        else:
-            st.error(f"Weibull analysis failed: {st.session_state.weibull_results['error_message']}")
-
-    if st.session_state.cnc_df is not None:
-        if st.button("🔍 Run ALL Analysis"):
+        if st.button("🔍 Analyze CNC Data"):
             # Agent 2: Expert Analysis
             with st.spinner("Agent 2 (CNC Expert) is analyzing the data..."):
+
+                # data_string = st.session_state.cnc_df.to_string() # Old line
+                # New line - sends a statistical summary
+                # data_string = st.session_state.cnc_df.describe().to_string()
                 data_string = st.session_state.cnc_df.sample(
                     n=500, random_state=1
                 ).to_string()
@@ -376,7 +274,6 @@ def run_cnc_ai_agent(llm):
         st.markdown("### Agent 3: Business Impact Report")
         st.markdown(st.session_state.cnc_benefits)
         st.success("✅ CNC Analysis Workflow Complete.")
-
 
 # ===============================================================================
 
