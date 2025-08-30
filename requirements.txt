@@ -25,3 +25,5 @@ langchain_community
 openpyxl
 reportlab
 scipy 
+matplotlib
+statsmodels
