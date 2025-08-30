@@ -198,7 +198,7 @@ def run_weibull_ui():
 
 # --- CNC AI Agent Functions ---
 def run_cnc_expert_agent(llm, cnc_data_string):
-    """Agent 2: Analyzes CNC data for anomalies and provides solutions."""
+    """Agent 2: Analyzes CNC data for anomalies, provides solutions, and predicts failures."""
     prompt = PromptTemplate.from_template(
         """
 You are a world-class CNC Machine diagnostician and maintenance expert with 30 years of experience in high-volume automotive manufacturing.
@@ -211,10 +211,17 @@ Your analysis must be thorough and actionable for a shop floor manager to preven
 ---
 
 **Instructions:**
-1.  **Identify Anomalies:** Carefully examine the data for any unusual patterns, spikes, drops, or correlations between different metrics for devicename, locations, tagname, the position or velocity error on the axes, the reference velocity or another reference value for the axes and others like e.g temperature vs. vibration, spindle speed vs. tool wear). List each anomaly you find.
+1.  **Identify Anomalies:** Carefully examine the data for any unusual patterns, spikes, drops, or correlations between different metrics (e.g., temperature vs. vibration, spindle speed vs. tool wear). List each anomaly you find.
 2.  **Determine Root Cause:** For each anomaly, provide a detailed explanation of the most likely root cause. Be specific. For example, instead of "machine is vibrating," say "A sudden spike in Y-axis vibration concurrent with a rise in spindle temperature suggests a worn spindle bearing or an unbalanced tool."
 3.  **Provide Detailed Fixes:** For each identified issue, provide a clear, step-by-step Standard Operating Procedure (SOP) that a maintenance technician can follow to fix the problem. Include required tools and estimated time for the fix.
-4.  **Structure Your Report:** Format your response using markdown with the following sections:
+4.  **Perform Failure Prediction (Weibull Analysis):** Based on the pattern of anomalies you identified (which can be treated as potential failure events), perform a conceptual Weibull analysis to predict future failures.
+    * **Estimate Weibull Parameters:** Based on whether the anomalies are occurring more frequently over time, randomly, or less frequently, provide a hypothesized shape parameter (β) and an estimated scale parameter (η, characteristic life in hours).
+    * **Interpret Failure Mode:** State whether the machine is likely in **infant mortality (β < 1)**, **useful life (β ≈ 1)**, or **wear-out (β > 1)**, and justify your choice based on the data.
+    * **Predict 30-Day Failure Probability:** Estimate the probability of a critical failure within the next 30 days of operation.
+    * **Recommend Predictive Action:** Based on the predicted probability, give a clear recommendation (e.g., 'Generate maintenance alert' or 'No immediate action required').
+
+**Structure Your Report:**
+Format your response using markdown with the following sections:
     - **Overall Machine Health Summary**
     - **Anomaly 1: [Name of Anomaly]**
         - **Description:**
@@ -222,11 +229,15 @@ Your analysis must be thorough and actionable for a shop floor manager to preven
         - **Recommended Action Plan (SOP):**
     - **Anomaly 2: [Name of Anomaly]** (If applicable)
         - ... and so on.
+    - **Failure Prediction Analysis**
+        - **Weibull Parameter Estimates:** (Your estimated β and η)
+        - **Failure Mode Interpretation:** (Your analysis of the failure mode)
+        - **30-Day Failure Probability:** (Your calculated probability)
+        - **Recommendation:** (Your final predictive action)
 """
     )
     chain = LLMChain(llm=llm, prompt=prompt)
     return chain.run(cnc_data=cnc_data_string)
-
 
 def run_business_impact_agent(llm, analysis_report):
     """Agent 3: Calculates the business benefits of the proactive fix."""
@@ -248,6 +259,7 @@ Based on the severity and nature of the issues described in the report, calculat
 1.  **Downtime Avoidance (in hours):** Estimate the total potential plant floor downtime (in hours) that would have occurred if these issues led to a full machine breakdown. Justify your estimation based on the report.
 2.  **Productivity Savings:** Calculate the number of cars that will not be lost due to this avoided downtime. Use the formula: `Avoided Downtime Hours * 40 Cars/Hour`.
 3.  **Labor Cost Savings:** Estimate the reactive labor hours that would have been needed to diagnose and fix a a full breakdown (this is typically much higher than proactive maintenance). Calculate the cost savings using the formula: `(Reactive Repair Hours - Proactive Repair Hours from report) * £100/Hour`. Be realistic in your estimation of reactive hours.
+4.  **Weibull Failure Prediction** Perform Weibull analysis on equipment failure data on uploaded data
 
 **Output Format:**
 Provide a concise summary using markdown.
@@ -338,7 +350,8 @@ def run_cnc_ai_agent(llm):
 # --- Streamlit UI and Logic ---
 step = st.sidebar.radio(
     "**Available Agents:**",
-    ["1. CNC AI Agent", "2. Weibull Failure Prediction Agent"], # <-- Added new agent here
+    ["1. CNC AI Agent", 
+     #"2. Weibull Failure Prediction Agent"], # <-- Added new agent here
 )
 
 # Initialize session state variables
